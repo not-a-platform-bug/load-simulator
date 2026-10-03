@@ -1,0 +1,59 @@
+spring:
+  application:
+    name: order
+  threads:
+    virtual:
+      enabled: false
+  datasource:
+    url: jdbc:mysql://toxiproxy:13306/orders?useSSL=false&allowPublicKeyRetrieval=true
+    username: app
+    password: app
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 3000
+  data:
+    redis:
+      host: redis
+  rabbitmq:
+    host: rabbitmq
+  kafka:
+    bootstrap-servers: kafka:9092
+    producer:
+      acks: all
+server:
+  port: 8080
+  tomcat:
+    threads:
+      max: 100
+    accept-count: 100
+app:
+  messaging: rabbit
+  payment:
+    url: http://toxiproxy:18081
+    read-timeout: 3s
+  stock:
+    url: http://toxiproxy:18082
+resilience4j:
+  circuitbreaker:
+    instances:
+      payment:
+        sliding-window-size: 50
+        minimum-number-of-calls: 20
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 1s
+        slow-call-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 5
+  retry:
+    instances:
+      payment:
+        max-attempts: 1
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

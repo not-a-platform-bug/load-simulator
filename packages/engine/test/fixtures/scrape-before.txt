@@ -1,0 +1,8 @@
+# HELP http_server_requests_seconds
+http_server_requests_seconds_count{method="GET",outcome="SUCCESS",status="200",uri="/orders/{id}",} 1000.0
+http_server_requests_seconds_sum{method="GET",outcome="SUCCESS",status="200",uri="/orders/{id}",} 8.0
+http_server_requests_seconds_count{method="POST",outcome="SUCCESS",status="200",uri="/orders",} 200.0
+http_server_requests_seconds_sum{method="POST",outcome="SUCCESS",status="200",uri="/orders",} 10.0
+http_server_requests_seconds_count{method="GET",outcome="SUCCESS",status="200",uri="/actuator/health",} 50.0
+process_cpu_time_ns_total 1.0E11
+jvm_gc_memory_allocated_bytes_total 5.0E10

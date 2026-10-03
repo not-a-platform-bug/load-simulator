@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Static checks and capacity of the demo scenarios
+        run: |
+          for f in examples/*.yaml; do
+            node packages/cli/dist/load-sim.cjs check "$f"
+          done
+          node packages/cli/dist/load-sim.cjs capacity examples/03-event-capacity.yaml --min-rps 1500

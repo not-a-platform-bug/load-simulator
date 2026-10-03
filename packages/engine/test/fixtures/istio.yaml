@@ -1,0 +1,18 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata: { name: payment }
+spec:
+  hosts: [payment]
+  http:
+    - route: [{ destination: { host: payment } }]
+      timeout: 3s
+      retries: { attempts: 2, perTryTimeout: 1s, retryOn: "5xx,connect-failure,reset" }
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata: { name: payment }
+spec:
+  host: payment
+  trafficPolicy:
+    connectionPool: { http: { http2MaxRequests: 200 } }
+    outlierDetection: { consecutive5xxErrors: 3, interval: 10s, baseEjectionTime: 20s, maxEjectionPercent: 50 }

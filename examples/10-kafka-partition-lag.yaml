@@ -1,0 +1,65 @@
+# 데모 10. Kafka 파티션 지연 (핫 파티션 + 블로킹 재시도)
+#
+# 터지는 장면: 주문 이벤트 토픽은 파티션 6개인데 컨슈머 스레드는 12개라 절반이 논다. 특정 판매자 키에 이벤트가 몰려
+#             한 파티션에 메시지가 쌓이고, 30초에 정산 DB가 잠깐 실패하자 제자리 재시도가 그 파티션을 막아 lag가 폭증한다.
+
+demo:
+  id: kafka-partition-lag
+  title: Kafka 파티션 지연
+  break: 파티션보다 컨슈머가 많아 절반이 놀고, 핫 파티션에 lag가 쌓이며, 실패한 레코드의 제자리 재시도가 파티션을 막습니다.
+  focus: order-events
+
+nodes:
+  order:
+    instances: 2
+    runtime: { threads: 200 }
+    endpoints:
+      POST /orders:
+        selfTime: { p50: 5ms, p99: 20ms }
+        calls: [ "order-db:insertOrder", "order-events:publish" ]
+  order-events:
+    kind: queue
+    broker: kafka
+    kafka: { partitions: 6, keySkew: 0.6, rebalanceTime: 10s }
+    consumer:
+      service: settlement
+      endpoint: "@KafkaListener settle"
+      concurrency: 6
+      maxPollRecords: 500
+      onError: retry
+      retryBackoff: 1s
+      maxRetries: 9
+      dlq: true
+  settlement:
+    instances: 2
+    endpoints:
+      "@KafkaListener settle":
+        selfTime: { p50: 6ms, p99: 20ms }
+        calls: [ "settlement-db:insertLedger" ]
+  order-db:
+    kind: db
+    queries:
+      insertOrder: { p50: 3ms, p99: 12ms }
+  settlement-db:
+    kind: db
+    queries:
+      insertLedger: { p50: 3ms, p99: 10ms }
+
+scenario:
+  duration: 90s
+  warmup: 5s
+  seed: 10
+  traffic:
+    type: constant
+    rps: 600
+    mix: { "POST /orders": 100% }
+  faults:
+    - { target: settlement-db, at: 30s, until: 33s, errorRate: 20% }
+  slo: { p99: 200ms, errorRate: 0.1% }
+
+layout:
+  order: [80, 140]
+  order-db: [380, 20]
+  order-events: [380, 220]
+  settlement: [680, 220]
+  settlement-db: [980, 220]

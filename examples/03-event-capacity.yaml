@@ -1,0 +1,90 @@
+# 데모 3. 이벤트 오픈 용량 산출
+#
+# 터지는 장면: 30초에 이벤트가 열리며 트래픽이 10배(200 → 2,000 RPS)로 뛴다. 주문 서비스 CPU와
+#             order-db 커넥션풀이 포화되어 p99가 폭증한다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: event-capacity
+  title: 이벤트 오픈 용량 산출
+  break: 트래픽이 10배로 뛰는 순간 주문 서비스 CPU와 DB 커넥션풀이 포화되어 p99가 폭증합니다.
+  focus: order
+
+nodes:
+  order:
+    instances: 2
+    runtime: { threads: 200, acceptCount: 100 }
+    os: { vcpu: 2, heap: 2g, gc: g1, somaxconn: 4096 }
+    endpoints:
+      GET /products:
+        selfTime: { dist: lognormal, p50: 3ms, p99: 15ms }
+        cpu: 2ms
+        alloc: 200kb
+        calls:
+          - { call: "redis:GET product", onMiss: [ "order-db:selectProduct" ] }
+      POST /carts:
+        selfTime: { dist: lognormal, p50: 5ms, p99: 25ms }
+        cpu: 3ms
+        alloc: 300kb
+        calls: [ "redis:SET cart", "order-db:upsertCart" ]
+      POST /orders:
+        selfTime: { dist: lognormal, p50: 8ms, p99: 40ms }
+        cpu: 6ms
+        alloc: 1mb
+        calls:
+          - "order-db:selectStock x items"
+          - "order-db:insertOrder"
+          - "pg:POST /v1/payments"
+  redis:
+    kind: cache
+    hitRate: 92%
+    opTime: { dist: lognormal, p50: 0.15ms, p99: 0.6ms }
+  order-db:
+    kind: db
+    maxConnections: 300
+    contention: { saturation: 40, latencyX: 3, shape: 1.5 }
+    queries:
+      selectProduct: { latency: { p50: 3ms, p99: 12ms } }
+      upsertCart: { latency: { p50: 4ms, p99: 15ms } }
+      selectStock: { latency: { p50: 1.5ms, p99: 6ms } }
+      insertOrder: { latency: { p50: 6ms, p99: 25ms } }
+  pg:
+    kind: external
+    concurrency: 400
+    latency: { dist: lognormal, p50: 120ms, p99: 450ms }
+    failureRate: 0.05%
+    rateLimit: 1000rps
+
+edges:
+  order->order-db:
+    pool: { size: 8, timeout: 2s }
+  order->pg:
+    network: { rtt: 8ms, jitter: 2ms }
+    timeout: 3s
+    pool: { size: 100, timeout: 1s }
+
+scenario:
+  duration: 80s
+  warmup: 5s
+  seed: 3
+  clientTimeout: 10s
+  vars:
+    items: { dist: uniform, min: 1, max: 5 }
+  traffic:
+    type: spike
+    base: 200rps
+    peak: 2000rps
+    at: 30s
+    hold: 35s
+    mix: { "GET /products": 70%, "POST /carts": 20%, "POST /orders": 10% }
+  slo:
+    p99: 300ms
+    errorRate: 0.1%
+    endpoints:
+      POST /orders: { p99: 1s }
+
+layout:
+  order: [80, 200]
+  redis: [420, 40]
+  order-db: [420, 220]
+  pg: [420, 400]

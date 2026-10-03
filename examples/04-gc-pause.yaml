@@ -1,0 +1,50 @@
+# 데모 4. GC 일시정지 연쇄
+#
+# 터지는 장면: 요청당 할당량이 큰 API에 트래픽이 점점 늘면 young GC가 잦아지고, Parallel GC의 긴 full GC가
+#             주기적으로 모든 요청을 멈춰 p99가 톱니처럼 튄다. 스레드는 남아 있는데도 느리다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: gc-pause
+  title: GC 일시정지 연쇄
+  break: 할당량이 큰 API에 트래픽이 늘면 GC가 잦아지고 Parallel GC의 full GC가 모든 요청을 주기적으로 멈춰 p99가 튑니다.
+  focus: catalog
+
+nodes:
+  catalog:
+    instances: 2
+    runtime: { threads: 200 }
+    os: { vcpu: 4, heap: 768m, gc: parallel }
+    endpoints:
+      GET /catalog/search:
+        selfTime: { p50: 12ms, p99: 45ms }
+        cpu: 3ms
+        alloc: 6mb
+        calls: [ "search-db:search" ]
+  search-db:
+    kind: db
+    contention: { saturation: 64, latencyX: 2 }
+    queries:
+      search: { p50: 4ms, p99: 15ms }
+
+edges:
+  catalog->search-db:
+    pool: { size: 30, timeout: 2s }
+
+scenario:
+  duration: 90s
+  warmup: 5s
+  seed: 4
+  clientTimeout: 10s
+  traffic:
+    type: ramp
+    from: 100rps
+    to: 900rps
+    start: 0s
+    end: 70s
+    mix: { "GET /catalog/search": 100% }
+  slo: { p99: 250ms, errorRate: 0.1% }
+
+layout:
+  catalog: [80, 120]
+  search-db: [420, 120]

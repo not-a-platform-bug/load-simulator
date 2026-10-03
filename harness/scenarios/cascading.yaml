@@ -1,0 +1,90 @@
+# The simulator's model of the harness (harness/services + docker-compose.yml).
+# Latencies below are starting guesses; run.mjs measures the real system at low load and calibrates them
+# before predicting high load and the fault run.
+
+nodes:
+  order:
+    instances: 1
+    runtime: { threads: 100, acceptCount: 100 }
+    os: { vcpu: 2, heap: 768m, gc: g1 }
+    endpoints:
+      GET /products/{id}:
+        selfTime: { p50: 2ms, p99: 8ms }
+        cpu: 1ms
+        calls:
+          - { call: "redis:GET product", onMiss: [ "orders-db:selectProduct" ] }
+      POST /orders:
+        selfTime: { p50: 4ms, p99: 15ms }
+        cpu: 3ms
+        calls:
+          - "stock:GET /stocks/{id} x 1..3"
+          - "orders-db:insertOrder"
+          - "payment:POST /payments/approve"
+          - "order-events:publish"
+  payment:
+    runtime: { threads: 50 }
+    os: { vcpu: 1, heap: 512m }
+    endpoints:
+      POST /payments/approve:
+        selfTime: { p50: 1ms, p99: 5ms }
+        calls: [ "payments-db:insertPayment" ]
+      "@RabbitListener settle":
+        selfTime: { p50: 1ms, p99: 4ms }
+        cpu: 1ms
+        calls: [ "payments-db:insertLedger" ]
+  stock:
+    runtime: { threads: 100 }
+    os: { vcpu: 1, heap: 512m }
+    endpoints:
+      GET /stocks/{id}:
+        selfTime: { p50: 1ms, p99: 4ms }
+        calls: [ "orders-db:selectStock" ]
+  redis:
+    kind: cache
+    opTime: { p50: 0.3ms, p99: 1.5ms }
+    ops:
+      GET product: { ttl: 30s, keys: 1000, ttlJitter: 0 }
+  orders-db:
+    kind: db
+    maxConnections: 300
+    contention: { saturation: 16, latencyX: 2 }
+    queries:
+      selectProduct: { p50: 0.6ms, p99: 3ms }
+      selectStock: { p50: 0.6ms, p99: 3ms }
+      insertOrder: { p50: 2ms, p99: 8ms }
+  payments-db:
+    kind: db
+    maxConnections: 300
+    contention: { saturation: 16, latencyX: 2 }
+    queries:
+      insertPayment: { p50: 2ms, p99: 8ms }
+      insertLedger: { p50: 2ms, p99: 8ms }
+  order-events:
+    kind: queue
+    consumer: { service: payment, endpoint: "@RabbitListener settle", concurrency: 2, prefetch: 10, ack: auto }
+
+edges:
+  client->order: { network: { rtt: 0.3ms } }
+  order->payment:
+    network: { rtt: 0.4ms }
+    timeout: 3s
+    connectTimeout: 1s
+    circuitBreaker: { failureRate: 50, slowCall: 1s, slowCallRate: 50, window: 50, minCalls: 20, openFor: 10s, halfOpenCalls: 5 }
+    fallback: { latency: 0.5ms }
+  order->stock: { network: { rtt: 0.4ms }, timeout: 2s }
+  order->orders-db: { pool: { size: 20, timeout: 3s } }
+  payment->payments-db: { pool: { size: 10, timeout: 5s } }
+  stock->orders-db: { pool: { size: 10, timeout: 30s } }
+
+scenario:
+  duration: 120s
+  warmup: 10s
+  seed: 1
+  clientTimeout: 10s
+  traffic:
+    type: constant
+    rps: 200
+    mix: { "GET /products/{id}": 80%, "POST /orders": 20% }
+  faults:
+    - { target: payments-db, at: 40s, until: 80s, latencyX: 100 }
+  slo: { p99: 300ms, errorRate: 1% }

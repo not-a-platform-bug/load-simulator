@@ -1,0 +1,92 @@
+# Validation harness: real services with fixed CPU/memory limits, fault injection through Toxiproxy,
+# metrics in Prometheus. Started by harness/run.mjs (which also generates out/env/*.env from the scenario).
+name: load-sim-harness
+
+x-service: &service
+  build:
+    context: ./services
+  depends_on:
+    mysql: { condition: service_healthy }
+    redis: { condition: service_started }
+    rabbitmq: { condition: service_healthy }
+    toxiproxy: { condition: service_started }
+  restart: unless-stopped
+
+services:
+  order:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: order } }
+    env_file: [{ path: ./out/env/order.env, required: false }]
+    ports: ["8080:8080"]
+    cpus: 2.0
+    mem_limit: 1g
+
+  payment:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: payment } }
+    env_file: [{ path: ./out/env/payment.env, required: false }]
+    cpus: 1.0
+    mem_limit: 768m
+
+  stock:
+    <<: *service
+    build: { context: ./services, args: { SERVICE: stock } }
+    env_file: [{ path: ./out/env/stock.env, required: false }]
+    cpus: 1.0
+    mem_limit: 768m
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    command: ["--max-connections=300", "--innodb-buffer-pool-size=256M"]
+    volumes: ["./infra/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 2s
+      retries: 60
+    cpus: 2.0
+    mem_limit: 1g
+
+  redis:
+    image: redis:7.4
+    cpus: 0.5
+    mem_limit: 256m
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 3s
+      retries: 60
+    cpus: 1.0
+    mem_limit: 512m
+
+  kafka:
+    image: apache/kafka:3.9.0
+    profiles: ["kafka"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    cpus: 1.0
+    mem_limit: 1g
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: ["./infra/toxiproxy.json:/config/toxiproxy.json:ro"]
+    ports: ["8474:8474"]
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--web.enable-lifecycle"]
+    volumes: ["./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]

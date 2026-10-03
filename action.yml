@@ -1,0 +1,63 @@
+name: load-simulator capacity check
+description: Simulate a scenario on every pull request and fail when the SLO capacity drops below a threshold (no load test needed).
+branding:
+  icon: activity
+  color: green
+inputs:
+  scenario:
+    description: Path to the scenario YAML
+    required: true
+  min-rps:
+    description: Fail if the SLO-limit RPS is below this value (empty = report only)
+    required: false
+    default: ''
+  p99:
+    description: Override the scenario SLO p99 (e.g. 300ms)
+    required: false
+    default: ''
+  error-rate:
+    description: Override the scenario SLO error rate (e.g. 0.1%)
+    required: false
+    default: ''
+  fail-on-warnings:
+    description: Fail when static checks report warnings (timeout inversion, retry amplification, …)
+    required: false
+    default: 'false'
+outputs:
+  max-rps:
+    description: SLO-limit RPS found by the capacity search
+    value: ${{ steps.capacity.outputs.max-rps }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - name: Build load-sim
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --no-audit --no-fund && npm run build -w @load-simulator/cli
+    - name: Static checks
+      shell: bash
+      run: |
+        out=$(node "${{ github.action_path }}/packages/cli/dist/load-sim.cjs" check "${{ inputs.scenario }}")
+        echo "$out"
+        { echo "### 정적 검사 — ${{ inputs.scenario }}"; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        if [ "${{ inputs.fail-on-warnings }}" = "true" ] && echo "$out" | grep -q '^⚠'; then exit 1; fi
+    - name: Capacity
+      id: capacity
+      shell: bash
+      run: |
+        args=()
+        [ -n "${{ inputs.p99 }}" ] && args+=(--p99 "${{ inputs.p99 }}")
+        [ -n "${{ inputs.error-rate }}" ] && args+=(--error-rate "${{ inputs.error-rate }}")
+        [ -n "${{ inputs.min-rps }}" ] && args+=(--min-rps "${{ inputs.min-rps }}")
+        set +e
+        out=$(node "${{ github.action_path }}/packages/cli/dist/load-sim.cjs" capacity "${{ inputs.scenario }}" "${args[@]}" --report capacity.md 2>&1)
+        code=$?
+        set -e
+        echo "$out"
+        rps=$(echo "$out" | grep -oE '최대 [0-9,]+ RPS' | head -1 | grep -oE '[0-9,]+' | tr -d ,)
+        echo "max-rps=$rps" >> "$GITHUB_OUTPUT"
+        cat capacity.md >> "$GITHUB_STEP_SUMMARY" || true
+        exit $code

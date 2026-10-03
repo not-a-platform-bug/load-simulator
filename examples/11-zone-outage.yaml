@@ -1,0 +1,85 @@
+# 데모 11. 가용 영역(AZ) 장애
+#
+# 터지는 장면: API 게이트웨이와 결제 서비스는 세 존에 퍼져 있지만, 주문 서비스와 주문 DB는 존 a에만 있다.
+#             40초에 존 a가 통째로 멈추면 게이트웨이는 살아 있어도 주문 경로 전체가 죽는다.
+#             서비스 메시는 앱 재시도 위에 다시 재시도해 장애 중 호출을 불린다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: zone-outage
+  title: 가용 영역(AZ) 장애
+  break: 주문 서비스와 DB가 존 a에만 있어, 존 a가 멈추면 게이트웨이가 살아 있어도 주문 경로 전체가 죽습니다.
+  focus: order
+
+topology: { zones: [a, b, c], crossZoneRtt: 1ms, zoneAware: false }
+
+mesh:
+  sidecarLatency: { p50: 0.3ms, p99: 2ms }
+  sidecarCpu: 0.2ms
+  retries: { attempts: 2, perTryTimeout: 500ms }
+  exclude: [gateway]
+
+nodes:
+  gateway:
+    kind: gateway
+    instances: 3
+    os: { vcpu: 2 }
+    routes:
+      "/orders/**": { to: order, timeout: 2s }
+      "/products/**": { to: catalog, timeout: 1s }
+  catalog:
+    instances: 3
+    endpoints:
+      GET /products/{id}:
+        selfTime: { p50: 3ms, p99: 12ms }
+        calls: [ "catalog-cache:GET product" ]
+  catalog-cache:
+    kind: cache
+    cluster: { shards: 3, replicas: 1, failoverTime: 10s }
+    ops:
+      GET product: { hitRate: 100% }
+  order:
+    instances: 2
+    zones: [a]
+    endpoints:
+      POST /orders:
+        selfTime: { p50: 6ms, p99: 25ms }
+        calls: [ "order-db:insertOrder", "payment:POST /payments" ]
+      GET /orders/{id}:
+        selfTime: { p50: 3ms, p99: 12ms }
+        calls: [ "order-db:selectOrder" ]
+  payment:
+    instances: 3
+    endpoints:
+      POST /payments:
+        selfTime: { p50: 5ms, p99: 20ms }
+  order-db:
+    kind: db
+    zones: [a]
+    queries:
+      insertOrder: { p50: 3ms, p99: 12ms }
+      selectOrder: { p50: 1ms, p99: 5ms }
+
+edges:
+  order->payment: { timeout: 1s, retry: { max: 3, wait: 50ms } }
+
+scenario:
+  duration: 90s
+  warmup: 5s
+  seed: 11
+  clientTimeout: 10s
+  traffic:
+    type: constant
+    rps: 600
+    mix: { "GET /products/{id}": 60%, "POST /orders": 25%, "GET /orders/{id}": 15% }
+  faults:
+    - { target: "*", zone: a, at: 40s, until: 70s, down: true }
+  slo: { p99: 300ms, errorRate: 0.5% }
+
+layout:
+  gateway: [60, 200]
+  catalog: [360, 40]
+  catalog-cache: [660, 40]
+  order: [360, 260]
+  order-db: [660, 200]
+  payment: [660, 380]

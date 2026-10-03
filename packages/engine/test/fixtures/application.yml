@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: order
+  datasource:
+    url: jdbc:mysql://order-mysql:3306/orders?useSSL=false
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 3000
+  data:
+    redis:
+      host: redis
+  rabbitmq:
+    listener:
+      simple:
+        concurrency: 4
+        prefetch: 10
+        acknowledge-mode: manual
+        default-requeue-rejected: true
+  cloud:
+    openfeign:
+      client:
+        config:
+          payment:
+            connect-timeout: 500
+            read-timeout: 2000
+server:
+  tomcat:
+    threads:
+      max: 150
+    accept-count: 200
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-size: 50
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+    instances:
+      payment:
+        base-config: default
+        slow-call-duration-threshold: 1s
+        slow-call-rate-threshold: 60
+        minimum-number-of-calls: 20
+  retry:
+    instances:
+      payment:
+        max-attempts: 3
+        wait-duration: 200ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        enable-randomized-wait: true
+  timelimiter:
+    instances:
+      payment:
+        timeout-duration: 2s
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+server:
+  tomcat:
+    threads:
+      max: 400

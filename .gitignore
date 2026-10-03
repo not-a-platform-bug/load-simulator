@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.vite/
+coverage/
+.claude/
+harness/services/**/build/
+harness/services/.gradle/
+harness/out/

@@ -1,0 +1,76 @@
+# 데모 1. 결제 DB 지연 → 연쇄 장애
+#
+# 터지는 장면: 20초에 payment-db가 20배 느려진다. 결제 서비스는 커넥션풀을 기다리느라 스레드가 고갈되고,
+#             주문 서비스 스레드도 결제 응답을 3초씩 기다리다 고갈된다. 결제와 상관없는 상품 조회까지 죽는다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: cascading-failure
+  title: 결제 DB 지연 → 연쇄 장애
+  break: 결제 DB가 20배 느려지면 결제·주문 서비스 스레드가 차례로 고갈되어 상관없는 상품 조회까지 실패합니다.
+  focus: order->payment
+
+nodes:
+  order:
+    kind: service
+    instances: 2
+    runtime: { threads: 100, acceptCount: 100 }
+    os: { vcpu: 2, heap: 2g, gc: g1 }
+    endpoints:
+      GET /products:
+        selfTime: { dist: lognormal, p50: 4ms, p99: 20ms }
+        calls: [ "order-db:selectProducts" ]
+      POST /orders:
+        selfTime: { dist: lognormal, p50: 8ms, p99: 40ms }
+        calls: [ "order-db:insertOrder", "payment:POST /payments/approve" ]
+  payment:
+    kind: service
+    instances: 2
+    runtime: { threads: 50 }
+    os: { vcpu: 2, heap: 1g }
+    endpoints:
+      POST /payments/approve:
+        selfTime: { dist: lognormal, p50: 5ms, p99: 25ms }
+        calls: [ "payment-db:approve" ]
+  order-db:
+    kind: db
+    maxConnections: 151
+    contention: { saturation: 32, latencyX: 3, shape: 1.5 }
+    queries:
+      selectProducts: { latency: { p50: 3ms, p99: 15ms } }
+      insertOrder: { latency: { p50: 4ms, p99: 20ms } }
+  payment-db:
+    kind: db
+    maxConnections: 151
+    queries:
+      approve: { latency: { p50: 10ms, p99: 40ms } }
+
+edges:
+  order->payment:
+    network: { rtt: 1ms }
+    timeout: 3s
+    circuitBreaker: { enabled: false, failureRate: 50, slowCall: 1s, slowCallRate: 50, window: 50, minCalls: 20, openFor: 10s, halfOpenCalls: 5 }
+    fallback: { latency: 2ms }
+  order->order-db:
+    pool: { size: 20, timeout: 3s }
+  payment->payment-db:
+    pool: { size: 10, timeout: 5s }
+
+scenario:
+  duration: 100s
+  warmup: 5s
+  seed: 42
+  clientTimeout: 10s
+  traffic:
+    type: constant
+    rps: 400
+    mix: { "GET /products": 70%, "POST /orders": 30% }
+  faults:
+    - { target: payment-db, at: 20s, until: 70s, latencyX: 20 }
+  slo: { p99: 500ms, errorRate: 1% }
+
+layout:
+  order: [80, 180]
+  payment: [400, 260]
+  order-db: [400, 60]
+  payment-db: [700, 260]

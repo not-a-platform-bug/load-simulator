@@ -1,0 +1,65 @@
+# 데모 8. 큐 컨슈머 지연과 회복
+#
+# 터지는 장면: 20초부터 20초 동안 정산 컨슈머가 멈춘다. 주문 이벤트는 계속 쌓이고, 컨슈머가 돌아와도
+#             리스너 스레드 3개 × prefetch 1로는 발행 속도를 겨우 따라가 적체가 오래 남는다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: queue-recovery
+  title: 큐 컨슈머 지연과 회복
+  break: 컨슈머가 20초 멈춘 뒤 돌아와도 리스너 3개 × prefetch 1로는 적체가 오래 남습니다.
+  focus: order-events
+
+nodes:
+  order:
+    instances: 2
+    runtime: { threads: 200 }
+    endpoints:
+      POST /orders:
+        selfTime: { p50: 5ms, p99: 20ms }
+        calls: [ "order-db:insertOrder", "order-events:publish" ]
+  order-events:
+    kind: queue
+    consumer:
+      service: settlement
+      endpoint: "@RabbitListener settle"
+      concurrency: 3
+      prefetch: 1
+      ack: manual
+      maxRetries: 3
+      dlq: true
+      deliveryRtt: 4ms
+  settlement:
+    instances: 2
+    runtime: { threads: 50 }
+    endpoints:
+      "@RabbitListener settle":
+        selfTime: { p50: 4ms, p99: 15ms }
+        calls: [ "settlement-db:insertLedger" ]
+  order-db:
+    kind: db
+    queries:
+      insertOrder: { p50: 3ms, p99: 12ms }
+  settlement-db:
+    kind: db
+    queries:
+      insertLedger: { p50: 3ms, p99: 10ms }
+
+scenario:
+  duration: 120s
+  warmup: 5s
+  seed: 8
+  traffic:
+    type: constant
+    rps: 400
+    mix: { "POST /orders": 100% }
+  faults:
+    - { target: order-events, at: 20s, until: 40s, pause: true }
+  slo: { p99: 200ms, errorRate: 0.1% }
+
+layout:
+  order: [80, 140]
+  order-db: [380, 20]
+  order-events: [380, 220]
+  settlement: [680, 220]
+  settlement-db: [980, 220]

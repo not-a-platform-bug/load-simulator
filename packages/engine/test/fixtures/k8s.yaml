@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: order, labels: { app: order } }
+spec:
+  replicas: 4
+  selector: { matchLabels: { app: order } }
+  template:
+    metadata: { labels: { app: order } }
+    spec:
+      topologySpreadConstraints:
+        - { maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: DoNotSchedule }
+      containers:
+        - name: app
+          image: shop/order:1.0
+          env:
+            - { name: JAVA_TOOL_OPTIONS, value: "-Xmx1536m -XX:+UseZGC" }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: 1500m, memory: 2Gi }
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8080 }, periodSeconds: 5, failureThreshold: 2 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: payment }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: payment } }
+  template:
+    spec:
+      nodeSelector: { topology.kubernetes.io/zone: a }
+      containers:
+        - name: app
+          resources: { limits: { cpu: "2", memory: 1Gi } }

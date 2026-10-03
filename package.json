@@ -1,0 +1,21 @@
+{
+  "name": "load-simulator",
+  "private": true,
+  "description": "Backend physics engine: simulate application/OS/network layers of an MSA in the browser",
+  "license": "MIT",
+  "workspaces": [
+    "packages/engine",
+    "packages/cli",
+    "packages/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @load-simulator/web",
+    "build": "npm run build -w @load-simulator/cli && npm run build -w @load-simulator/web",
+    "test": "npm test -w @load-simulator/engine",
+    "typecheck": "tsc -p packages/engine && tsc -p packages/cli && tsc -p packages/web",
+    "sim": "node packages/cli/dist/load-sim.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

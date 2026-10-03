@@ -1,0 +1,91 @@
+# 데모 15. 검색 폭주 (CDN · LB · Elasticsearch · PgBouncer)
+#
+# 구성: CDN → ALB → shop(4대) → Elasticsearch(데이터 노드 3대, 샤드 5개) / PgBouncer → PostgreSQL
+# 터지는 장면: 이벤트 공지 직후 검색이 몰린다. 상품 상세는 CDN이 대부분 받아 주지만 검색은 캐시되지 않는다.
+#             검색 하나가 샤드 5개 모두에 작업을 만들어 노드의 search 스레드풀(7)이 포화되고, 큐에서 기다리는 검색이
+#             shop의 워커 스레드를 붙잡아 상관없는 상품 상세·주문까지 느려진다. 더 몰리면 큐(1000)가 넘쳐 429가 난다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: search-spike
+  title: 검색 폭주 (CDN·ES·PgBouncer)
+  break: 상품 상세는 CDN이 막아 주지만 캐시되지 않는 검색이 몰리면 Elasticsearch 검색 스레드풀이 포화되고, 기다리는 검색이 shop 스레드를 붙잡아 주문까지 실패합니다.
+  focus: product-search
+
+nodes:
+  cdn:
+    kind: cdn
+    origin: alb
+    hitRate: 90%
+    rules:
+      "GET /search": 0%
+  alb:
+    kind: loadbalancer
+    target: shop
+    algorithm: least-conn
+    healthCheck: { interval: 5s, threshold: 2 }
+  shop:
+    instances: 4
+    runtime: { threads: 200 }
+    os: { vcpu: 2, heap: 2g }
+    endpoints:
+      GET /products/{id}:
+        selfTime: { p50: 3ms, p99: 12ms }
+        calls: [ "pgbouncer:selectProduct" ]
+      GET /search:
+        selfTime: { p50: 4ms, p99: 15ms }
+        calls:
+          - "product-search:search"
+          - { work: 2ms, cpu: 80% }
+      POST /orders:
+        selfTime: { p50: 5ms, p99: 20ms }
+        calls:
+          - "pgbouncer:selectProduct"
+          - "pgbouncer:insertOrder"
+  product-search:
+    kind: nosql
+    engine: elasticsearch
+    nodes: 3
+    partitions: 5
+    replication: 2
+    ops:
+      search: { latency: { p50: 6ms, p99: 30ms } }
+  pgbouncer:
+    kind: pooler
+    target: postgres
+    poolSize: 40
+    maxClientConn: 1000
+  postgres:
+    kind: db
+    maxConnections: 200
+    contention: { saturation: 32, latencyX: 3, shape: 1.5 }
+    queries:
+      selectProduct: { p50: 2ms, p99: 10ms }
+      insertOrder: { p50: 5ms, p99: 25ms }
+
+edges:
+  shop->pgbouncer: { pool: { size: 20, timeout: 2s }, timeout: 2s }
+  shop->product-search: { timeout: 2s }
+
+scenario:
+  duration: 70s
+  warmup: 5s
+  seed: 15
+  clientTimeout: 5s
+  traffic:
+    type: spike
+    base: 800rps
+    peak: 3000rps
+    at: 25s
+    hold: 25s
+    rampUp: 3s
+    mix: { "GET /products/{id}": 60%, "GET /search": 30%, "POST /orders": 10% }
+  slo: { p99: 300ms, errorRate: 0.5% }
+
+layout:
+  cdn: [-40, 160]
+  alb: [240, 160]
+  shop: [520, 160]
+  product-search: [840, 40]
+  pgbouncer: [840, 240]
+  postgres: [1140, 240]

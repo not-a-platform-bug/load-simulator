@@ -1,0 +1,50 @@
+# 데모 6. 패킷 손실 1%
+#
+# 터지는 장면: 20초부터 api→inventory 구간에 1% 패킷 손실이 생긴다. 큰 응답은 세그먼트가 많아 손실을 자주 맞고,
+#             TCP 재전송(최소 RTO 200ms)을 기다리느라 평균·p50은 그대로인데 p99만 RTO 단위로 튄다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: packet-loss
+  title: 패킷 손실 1%
+  break: 1% 손실만으로 재전송(RTO 200ms)을 기다리는 요청이 생겨 평균은 그대로인데 p99만 튑니다.
+  focus: api->inventory
+
+nodes:
+  api:
+    instances: 2
+    runtime: { threads: 200 }
+    os: { vcpu: 4, gc: zgc }
+    endpoints:
+      GET /stock:
+        selfTime: { p50: 3ms, p99: 10ms }
+        calls: [ "inventory:GET /inventory/{sku}" ]
+  inventory:
+    instances: 2
+    runtime: { threads: 200 }
+    os: { vcpu: 4, gc: zgc }
+    endpoints:
+      GET /inventory/{sku}:
+        selfTime: { p50: 6ms, p99: 20ms }
+        responseSize: 48kb
+
+edges:
+  api->inventory:
+    network: { rtt: 1ms, jitter: 0.2ms, rtoMin: 200ms }
+    timeout: 2s
+
+scenario:
+  duration: 80s
+  warmup: 5s
+  seed: 6
+  traffic:
+    type: constant
+    rps: 800
+    mix: { "GET /stock": 100% }
+  faults:
+    - { target: api->inventory, at: 20s, until: 70s, loss: 1% }
+  slo: { p99: 120ms, errorRate: 0.1% }
+
+layout:
+  api: [80, 120]
+  inventory: [420, 120]

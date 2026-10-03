@@ -1,0 +1,47 @@
+# 데모 5. 소켓 backlog 넘침
+#
+# 터지는 장면: Tomcat max-connections를 낮게 잡고 accept-count·somaxconn도 작으면, 짧은 버스트 동안
+#             listen backlog가 차서 SYN이 드롭된다. 클라이언트는 1초, 3초 뒤에야 재전송하므로 p99가 초 단위로 튄다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: backlog-overflow
+  title: 소켓 backlog 넘침
+  break: 버스트 순간 listen backlog가 차서 SYN이 드롭되고, 클라이언트는 1초·3초 재전송을 기다려 p99가 초 단위로 튑니다.
+  focus: gateway
+
+nodes:
+  gateway:
+    instances: 2
+    runtime: { threads: 100, maxConnections: 120, acceptCount: 64 }
+    os: { vcpu: 4, somaxconn: 64, gc: zgc }
+    endpoints:
+      GET /feed:
+        selfTime: { p50: 55ms, p99: 120ms }
+        cpu: 1ms
+        alloc: 64kb
+        calls: [ "feed-cache:GET feed" ]
+  feed-cache:
+    kind: cache
+    hitRate: 99%
+    threads: 4
+
+scenario:
+  duration: 60s
+  warmup: 2s
+  seed: 5
+  clientTimeout: 10s
+  traffic:
+    type: steps
+    steps:
+      - { at: 0s, rps: 1500 }
+      - { at: 15s, rps: 4500 }
+      - { at: 16s, rps: 1500 }
+      - { at: 35s, rps: 4500 }
+      - { at: 36s, rps: 1500 }
+    mix: { "GET /feed": 100% }
+  slo: { p99: 700ms, errorRate: 0.1% }
+
+layout:
+  gateway: [80, 120]
+  feed-cache: [420, 120]

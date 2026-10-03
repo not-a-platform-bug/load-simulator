@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: edge
+  cloud:
+    gateway:
+      routes:
+        - id: orders
+          uri: lb://order
+          predicates: [ "Path=/orders/**" ]
+          filters: [ "Retry=2" ]
+        - id: products
+          uri: lb://catalog
+          predicates: [ "Path=/products/**" ]
+          filters:
+            - name: RequestRateLimiter
+              args: { redis-rate-limiter.replenishRate: 500 }

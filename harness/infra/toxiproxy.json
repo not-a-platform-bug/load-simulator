@@ -1,0 +1,6 @@
+[
+  { "name": "mysql-orders", "listen": "0.0.0.0:13306", "upstream": "mysql:3306", "enabled": true },
+  { "name": "mysql-payments", "listen": "0.0.0.0:23306", "upstream": "mysql:3306", "enabled": true },
+  { "name": "payment", "listen": "0.0.0.0:18081", "upstream": "payment:8081", "enabled": true },
+  { "name": "stock", "listen": "0.0.0.0:18082", "upstream": "stock:8082", "enabled": true }
+]

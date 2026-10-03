@@ -1,0 +1,72 @@
+# 데모 2. 재시도 폭풍
+#
+# 터지는 장면: bff → order → payment → payment-db 세 계층이 각자 3회씩 재시도한다(jitter 없음).
+#             20초에 payment-db가 잠깐 느려지면 최하위로 가는 요청이 최악 27배로 불어나고,
+#             장애가 끝난 뒤에도 재시도가 DB를 계속 짓눌러 회복하지 못한다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: retry-storm
+  title: 재시도 폭풍
+  break: 세 계층이 각자 3회씩 재시도하면 최하위 payment-db로 가는 요청이 최악 27배가 되고, 장애가 끝나도 회복하지 못합니다.
+  focus: payment->payment-db
+
+nodes:
+  bff:
+    instances: 2
+    runtime: { threads: 200 }
+    endpoints:
+      GET /checkout:
+        selfTime: { p50: 2ms, p99: 10ms }
+        calls: [ "order:GET /orders/summary" ]
+  order:
+    instances: 2
+    runtime: { threads: 200 }
+    endpoints:
+      GET /orders/summary:
+        selfTime: { p50: 3ms, p99: 15ms }
+        calls: [ "payment:GET /payments/status" ]
+  payment:
+    instances: 2
+    runtime: { threads: 200 }
+    endpoints:
+      GET /payments/status:
+        selfTime: { p50: 2ms, p99: 10ms }
+        calls: [ "payment-db:selectStatus" ]
+  payment-db:
+    kind: db
+    maxConnections: 300
+    contention: { saturation: 64, latencyX: 3, shape: 1.5 }
+    queries:
+      selectStatus: { latency: { p50: 8ms, p99: 30ms } }
+
+edges:
+  bff->order:
+    timeout: 1s
+    retry: { max: 3, wait: 100ms, backoff: fixed, jitter: false }
+  order->payment:
+    timeout: 800ms
+    retry: { max: 3, wait: 100ms, backoff: fixed, jitter: false }
+  payment->payment-db:
+    timeout: 500ms
+    pool: { size: 40, timeout: 1s }
+    retry: { max: 3, wait: 100ms, backoff: fixed, jitter: false }
+
+scenario:
+  duration: 75s
+  warmup: 5s
+  seed: 7
+  clientTimeout: 5s
+  traffic:
+    type: constant
+    rps: 600
+    mix: { "GET /checkout": 100% }
+  faults:
+    - { target: payment-db, at: 20s, until: 35s, errorRate: 100% }
+  slo: { p99: 300ms, errorRate: 0.5% }
+
+layout:
+  bff: [40, 160]
+  order: [300, 160]
+  payment: [560, 160]
+  payment-db: [820, 160]

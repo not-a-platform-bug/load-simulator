@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: stock
+  datasource:
+    url: jdbc:mysql://toxiproxy:13306/orders?useSSL=false&allowPublicKeyRetrieval=true
+    username: app
+    password: app
+    hikari:
+      maximum-pool-size: 10
+server:
+  port: 8082
+  tomcat:
+    threads:
+      max: 100
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

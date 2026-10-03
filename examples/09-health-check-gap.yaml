@@ -1,0 +1,49 @@
+# 데모 9. 헬스체크 공백
+#
+# 터지는 장면: 20초에 payment 3대 중 1대가 응답 없이 멈춘다(hang). 헬스체크가 30초 간격 × 3회라서
+#             로드밸런서는 90초 동안 그 인스턴스로 요청의 1/3을 계속 보내고, 그 요청은 timeout까지 기다렸다 실패한다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: health-check-gap
+  title: 헬스체크 공백
+  break: 멈춘 인스턴스를 헬스체크가 90초 동안 못 잡아서 요청의 1/3이 timeout까지 기다렸다 실패합니다.
+  focus: api->payment
+
+nodes:
+  api:
+    instances: 2
+    runtime: { threads: 200 }
+    endpoints:
+      POST /checkout:
+        selfTime: { p50: 3ms, p99: 12ms }
+        calls: [ "payment:POST /pay" ]
+  payment:
+    instances: 3
+    lb: round-robin
+    healthCheck: { interval: 30s, threshold: 3 }
+    runtime: { threads: 200 }
+    endpoints:
+      POST /pay:
+        selfTime: { p50: 20ms, p99: 80ms }
+
+edges:
+  api->payment:
+    timeout: 3s
+
+scenario:
+  duration: 120s
+  warmup: 5s
+  seed: 9
+  clientTimeout: 10s
+  traffic:
+    type: constant
+    rps: 300
+    mix: { "POST /checkout": 100% }
+  faults:
+    - { target: payment, instance: 1, at: 20s, until: 100s, down: true, hang: true }
+  slo: { p99: 300ms, errorRate: 0.5% }
+
+layout:
+  api: [80, 120]
+  payment: [420, 120]

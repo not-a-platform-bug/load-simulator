@@ -1,0 +1,22 @@
+{
+  "name": "@load-simulator/cli",
+  "version": "0.1.0",
+  "description": "Run load-simulator scenarios from the command line or CI",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "load-sim": "dist/load-sim.cjs"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "esbuild src/load-sim.ts --bundle --platform=node --format=cjs --target=node20 --outfile=dist/load-sim.cjs --banner:js='#!/usr/bin/env node'"
+  },
+  "dependencies": {
+    "@load-simulator/engine": "0.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^20.0.0"
+  }
+}

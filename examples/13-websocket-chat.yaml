@@ -1,0 +1,86 @@
+# 데모 13. 실시간 채팅 (WebSocket) — 재연결 폭풍
+#
+# 클라이언트 8,000명이 NLB를 거쳐 채팅 서버 4대에 WebSocket으로 붙어 있다(연결은 처음 붙은 인스턴스에 고정).
+# 메시지는 받은 인스턴스가 처리하고 Redis pub/sub으로 방 구성원(30명)에게 퍼뜨린다 — 구독자가 있는 모든 인스턴스가 CPU를 쓴다.
+# 40초에 채팅 서버 1대가 죽으면 그 연결 ~2,000개가 정확히 1초 뒤 한꺼번에 재연결한다(jitter 없음).
+# 핸드셰이크마다 TLS CPU와 토큰 검증(auth → DB)이 필요해 auth가 무너지고, 실패한 클라이언트는 또 1초 뒤 같이 재시도한다.
+# 죽었던 서버가 돌아와도 기존 연결은 옮겨 가지 않아 인스턴스 간 연결 수가 크게 어긋난다.
+
+demo:
+  id: websocket-chat
+  title: 실시간 채팅 (WebSocket)
+  break: 채팅 서버 1대가 죽으면 연결 2,000개가 1초 뒤 동시에 재연결해 인증 서비스가 무너지고, 실패한 클라이언트가 다시 동시에 재시도합니다.
+  focus: chat
+
+nodes:
+  nlb:
+    kind: loadbalancer
+    target: chat
+    layer: 4
+    algorithm: least-conn
+    healthCheck: { interval: 2s, threshold: 2 }
+    instances: 2
+  chat:
+    instances: 4
+    runtime: { threads: 200 }
+    os: { vcpu: 2, heap: 2g, ulimit: 65535 }
+    endpoints:
+      GET /ws:
+        handshake: true            # WebSocket upgrade: 이 요청을 처리한 인스턴스가 연결을 붙잡는다
+        selfTime: { p50: 4ms, p99: 15ms }
+        cpu: 3ms                   # TLS 핸드셰이크 + 업그레이드
+        calls: [ "auth:GET /token/verify" ]
+      MESSAGE chat.send:
+        selfTime: { p50: 1ms, p99: 5ms }
+        cpu: 0.5ms
+        calls: [ "chat-redis:PUBLISH room" ]
+        broadcast: { fanout: 30, cpu: 0.02ms }
+  auth:
+    instances: 2
+    runtime: { threads: 50 }
+    os: { vcpu: 1 }
+    endpoints:
+      GET /token/verify:
+        selfTime: { p50: 4ms, p99: 15ms }
+        cpu: 2.5ms
+        calls: [ "auth-db:selectSession" ]
+  auth-db:
+    kind: db
+    contention: { saturation: 16, latencyX: 3 }
+    queries:
+      selectSession: { p50: 2ms, p99: 8ms }
+  chat-redis:
+    kind: cache
+    opTime: { p50: 0.1ms, p99: 0.5ms }
+
+edges:
+  client->nlb: { network: { rtt: 30ms, jitter: 5ms }, timeout: 5s }
+  chat->auth: { timeout: 1s }
+  auth->auth-db: { pool: { size: 10, timeout: 1s } }
+
+scenario:
+  duration: 90s
+  warmup: 25s
+  seed: 13
+  websocket:
+    connect: "GET /ws"
+    message: "chat:MESSAGE chat.send"
+    clients: 8000
+    connectOver: 20s
+    messageRate: 0.2               # 클라이언트당 초당 0.2건 → 1,600건/s
+    reconnect: { delay: 1s, multiplier: 1, jitter: false }
+    connMemory: 64kb
+  faults:
+    - { target: chat, instance: 1, at: 40s, until: 55s, down: true }
+  slo:
+    p99: 200ms
+    errorRate: 0.5%
+    endpoints:
+      GET /ws: { p99: 1s, errorRate: 1% }
+
+layout:
+  nlb: [40, 160]
+  chat: [320, 160]
+  auth: [620, 40]
+  auth-db: [900, 40]
+  chat-redis: [620, 280]

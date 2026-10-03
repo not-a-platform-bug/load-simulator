@@ -1,0 +1,55 @@
+# 데모 14. DynamoDB 핫 파티션
+#
+# 터지는 장면: 한정 수량 이벤트에서 주문이 인기 상품 몇 개에 몰린다. 테이블 전체 용량(파티션 8개 × 쓰기 1000/s)은
+#             충분한데, 파티션 키(productId)가 치우쳐 한 파티션만 쓰기 한도를 넘고 ProvisionedThroughputExceeded가 난다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: dynamodb-hot-partition
+  title: DynamoDB 핫 파티션
+  break: 전체 용량은 남는데 인기 상품 키가 한 파티션에 몰려 그 파티션만 쓰기 한도를 넘고 주문이 스로틀링됩니다.
+  focus: orders-table
+
+nodes:
+  order:
+    instances: 4
+    runtime: { threads: 200 }
+    os: { vcpu: 2 }
+    endpoints:
+      POST /orders:
+        selfTime: { p50: 3ms, p99: 12ms }
+        calls:
+          - "orders-table:GetItem"
+          - "orders-table:PutItem"
+      GET /orders/{id}:
+        selfTime: { p50: 2ms, p99: 8ms }
+        calls: [ "orders-table:GetItem" ]
+  orders-table:
+    kind: nosql
+    engine: dynamodb
+    partitions: 8
+    keySkew: 1.0
+    ops:
+      GetItem: { latency: { p50: 3ms, p99: 9ms } }
+      PutItem: { latency: { p50: 5ms, p99: 15ms } }
+
+edges:
+  order->orders-table: { timeout: 1s }
+
+scenario:
+  duration: 60s
+  warmup: 5s
+  seed: 14
+  traffic:
+    type: spike
+    base: 600rps
+    peak: 3000rps
+    at: 20s
+    hold: 25s
+    rampUp: 3s
+    mix: { "POST /orders": 60%, "GET /orders/{id}": 40% }
+  slo: { p99: 200ms, errorRate: 0.5% }
+
+layout:
+  order: [80, 140]
+  orders-table: [420, 60]

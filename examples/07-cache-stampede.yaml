@@ -1,0 +1,54 @@
+# 데모 7. 캐시 스탬피드
+#
+# 터지는 장면: 배포 직후 한꺼번에 채워진 캐시 항목이 같은 TTL(20초)로 동시에 만료된다. 그 순간 모든 요청이 미스를 내고
+#             product-db로 몰려 DB가 포화되고 p99가 폭증한다. TTL마다 반복된다.
+# 막는 장면은 YAML에 적지 않습니다 — 진단 패널의 권장 조치가 찾아냅니다.
+
+demo:
+  id: cache-stampede
+  title: 캐시 스탬피드
+  break: 동시에 채워진 캐시 항목이 같은 TTL로 한꺼번에 만료되면 요청이 DB로 몰려 p99가 TTL마다 폭증합니다.
+  focus: product-cache
+
+nodes:
+  product:
+    instances: 3
+    runtime: { threads: 200 }
+    os: { vcpu: 4, gc: g1, heap: 2g }
+    endpoints:
+      GET /products/{id}:
+        selfTime: { p50: 2ms, p99: 8ms }
+        calls:
+          - { call: "product-cache:GET product", onMiss: [ "product-db:selectProduct" ] }
+  product-cache:
+    kind: cache
+    threads: 2
+    ops:
+      GET product: { ttl: 20s, keys: 2000, ttlJitter: 0, singleFlight: false, skew: 0.6 }
+  product-db:
+    kind: db
+    maxConnections: 300
+    contention: { saturation: 16, latencyX: 3, shape: 1.5 }
+    queries:
+      selectProduct: { p50: 15ms, p99: 60ms }
+
+edges:
+  product->product-db:
+    pool: { size: 20, timeout: 2s }
+    timeout: 3s
+
+scenario:
+  duration: 75s
+  warmup: 5s
+  seed: 7
+  clientTimeout: 5s
+  traffic:
+    type: constant
+    rps: 1500
+    mix: { "GET /products/{id}": 100% }
+  slo: { p99: 100ms, errorRate: 0.1% }
+
+layout:
+  product: [80, 160]
+  product-cache: [420, 40]
+  product-db: [420, 260]
