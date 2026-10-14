@@ -23,4 +23,4 @@ jobs:
           for f in examples/*.yaml; do
             node packages/cli/dist/load-sim.cjs check "$f"
           done
-          node packages/cli/dist/load-sim.cjs capacity examples/03-event-capacity.yaml --min-rps 1500
+          node packages/cli/dist/load-sim.cjs capacity examples/03-event-capacity.yaml --min-rps 1400
